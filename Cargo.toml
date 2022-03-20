@@ -4,7 +4,3 @@ members = [
     "compute-shader-toy",
     "run-wasm",
 ]
-
-[profile.release-lto]
-inherits = "release"
-lto = true
