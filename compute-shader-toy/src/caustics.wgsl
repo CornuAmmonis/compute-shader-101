@@ -8,13 +8,13 @@ struct StorageBuffer {
     data: array<atomic<u32>>;
 };
 
-[[group(0), binding(0)]] var<uniform> params: Params;
-[[group(0), binding(1)]] var col: texture_storage_2d<rgba16float,write>;
-[[group(0), binding(2)]] var<storage,read_write> buf: StorageBuffer;
-[[group(0), binding(3)]] var tex: texture_2d_array<f32>;
-[[group(0), binding(4)]] var texs: texture_storage_2d_array<rgba16float,write>;
-[[group(0), binding(5)]] var nearest: sampler;
-[[group(0), binding(6)]] var bilinear: sampler;
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var col: texture_storage_2d<rgba32float,write>;
+@group(0) @binding(2) var<storage,read_write> buf: StorageBuffer;
+@group(0) @binding(3) var tex: texture_2d_array<f32>;
+@group(0) @binding(4) var texs: texture_storage_2d_array<rgba32float,write>;
+@group(0) @binding(5) var nearest: sampler;
+@group(0) @binding(6) var bilinear: sampler;
 
 fn hash44(p: vec4<f32>) -> vec4<f32> {
 	var p4 = fract(p * vec4<f32>(.1031, .1030, .0973, .1099));
@@ -30,20 +30,22 @@ let w = vec2<f32>(-1., 0.);
 
 fn A(fragCoord: vec2<f32>) -> vec4<f32> {
     let resolution = vec2<f32>(f32(params.width), f32(params.height));
-    return textureSampleLevel(tex, nearest, fract(fragCoord / resolution), 0, 0.);
+    //return textureSampleLevel(tex, nearest, fract(fragCoord / resolution), 0, 0.);
+    return textureLoad(tex, vec2<i32>(fragCoord), 0, 0);
 }
 
 fn B(fragCoord: vec2<f32>) -> vec4<f32> {
     let resolution = vec2<f32>(f32(params.width), f32(params.height));
-    return textureSampleLevel(tex, bilinear, fract(fragCoord / resolution), 1, 0.);
+    // should be bilinear
+    return textureLoad(tex, vec2<i32>(fragCoord), 1, 0);
 }
 
 fn T(fragCoord: vec2<f32>) -> vec4<f32> {
     return B(fragCoord - dt * B(fragCoord).xy);
 }
 
-[[stage(compute), workgroup_size(16, 16)]]
-fn main_velocity([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
+@stage(compute) @workgroup_size(16, 16)
+fn main_velocity(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let u = vec2<f32>(global_id.xy) + 0.5;
     var r = T(u);
     r.x = r.x - dt * 0.25 * (T(u+e).z - T(u+w).z);
@@ -53,8 +55,8 @@ fn main_velocity([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     textureStore(texs, vec2<i32>(global_id.xy), 0, r);
 }
 
-[[stage(compute), workgroup_size(16, 16)]]
-fn main_pressure([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
+@stage(compute) @workgroup_size(16, 16)
+fn main_pressure(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let resolution = vec2<f32>(f32(params.width), f32(params.height));
     let u = vec2<f32>(global_id.xy) + 0.5;
     var r = A(u);
@@ -66,8 +68,8 @@ fn main_pressure([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     textureStore(texs, vec2<i32>(global_id.xy), 1, r);
 }
 
-[[stage(compute), workgroup_size(16, 16)]]
-fn main_caustics([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
+@stage(compute) @workgroup_size(16, 16)
+fn main_caustics(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let resolution = vec2<f32>(f32(params.width), f32(params.height));
     for (var i = 0; i < 25; i = i+1) {
         let h = hash44(vec4<f32>(vec2<f32>(global_id.xy), f32(params.frame), f32(i)));
@@ -88,8 +90,8 @@ fn main_caustics([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     }
 }
 
-[[stage(compute), workgroup_size(16, 16)]]
-fn main_image([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
+@stage(compute) @workgroup_size(16, 16)
+fn main_image(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + global_id.y * params.width;
     let x = f32(atomicLoad(&buf.data[id*4u+0u]));
     let y = f32(atomicLoad(&buf.data[id*4u+1u]));
