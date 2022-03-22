@@ -65,11 +65,15 @@ impl Spawner {
 async fn run(event_loop: EventLoop<()>, window: Window) {
     //let shader = include_str!("caustics.wgsl");
     //let entry_points = ["main_velocity", "main_pressure", "main_caustics", "main_image"];
-    let shader = include_str!("buddhabrot.wgsl");
-    let entry_points = ["main_hist", "main_image"];
+    //let shader = include_str!("buddhabrot.wgsl");
+    //let entry_points = ["main_hist", "main_image"];
+    let shader = include_str!("atomic_particles.wgsl");
+    let entry_points = ["main_velocity", "main_pressure", "main_particle_spray", "main_image"];
 
     let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
     let surface = unsafe { instance.create_surface(&window) };
+
+    let tex_fmt = wgpu::TextureFormat::Rgba32Float;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: Default::default(),
@@ -79,7 +83,12 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         .await
         .expect("error finding adapter");
     let (device, queue) = adapter
-        .request_device(&Default::default(), None)
+        .request_device(&wgpu::DeviceDescriptor {
+            label: None,
+            features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                | wgpu::Features::default(),
+            limits: wgpu::Limits::default(),
+        }, None)
         .await
         .expect("error creating device");
     window.set_inner_size(winit::dpi::PhysicalSize::new(1280, 720));
@@ -110,7 +119,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba16Float,
+        format: tex_fmt,
         usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
     });
     let buf_read = device.create_texture(&wgpu::TextureDescriptor {
@@ -123,7 +132,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba16Float,
+        format: tex_fmt,
         usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
     });
     let buf_write = device.create_texture(&wgpu::TextureDescriptor {
@@ -136,7 +145,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba16Float,
+        format: tex_fmt,
         usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::STORAGE_BINDING,
     });
     let sb0 = device.create_buffer(&wgpu::BufferDescriptor {
@@ -169,7 +178,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: wgpu::TextureFormat::Rgba16Float,
+                    format: tex_fmt,
                     view_dimension: wgpu::TextureViewDimension::D2,
                 },
                 count: None,
@@ -201,7 +210,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::StorageTexture {
                     access: wgpu::StorageTextureAccess::WriteOnly,
-                    format: wgpu::TextureFormat::Rgba16Float,
+                    format: tex_fmt,
                     view_dimension: wgpu::TextureViewDimension::D2Array,
                 },
                 count: None,
