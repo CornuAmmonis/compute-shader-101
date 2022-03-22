@@ -170,9 +170,12 @@ fn pos_to_id_u3(pos: uint2) -> uint {
     return pos.x + pos.y * params.width;
 }
 
+let ARBITRARILY_LARGE_DISTANCE = 1.0e6;
+let INVALID_ID = 0xFFFFFFFFu;
+
 fn get_distance_with_nulls(id: uint, pos0: float2, pos1: float2) -> float {
     // return arbitrarily large number for null id
-    return select(float(1.0e4), distance(pos0, pos1), id >= 0u);
+    return select(ARBITRARILY_LARGE_DISTANCE, distance(pos0, pos1), id != INVALID_ID);
 }
 
 fn get_distance_vec(fragCoord: uint2, ids: uint4) -> float4 {
@@ -254,13 +257,24 @@ fn main_particle_spray([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
 
     let particle_data = A_u2(global_pos);
     let particle_pos = wrap_to_bounds(int2(particle_data.xy));
-    let particle_id = pos_to_id_u2(particle_pos);
-    var particle_nearest_ids = get_uint4_atomic(particle_id);
+    let particle_global_id = pos_to_id_u2(global_pos);
+    let particle_local_id = pos_to_id_u2(particle_pos);
+    var particle_nearest_ids = get_uint4_atomic(particle_local_id);
     var particle_nearest_dists = get_distance_vec(particle_pos, particle_nearest_ids);
     let particle_dist = distance(float2(particle_pos), particle_data.xy); //won't work for wrapped bounds
-    insertion_sort(&particle_nearest_ids, &particle_nearest_dists, particle_id, particle_dist);
-    set_uint4_atomic(particle_id, particle_nearest_ids);
 
+
+    var particle_nearest_ids_init = uint4(INVALID_ID);
+    var particle_nearest_dists_init = float4(ARBITRARILY_LARGE_DISTANCE);
+    // resort the existing index
+    for (var i = 0; i < 4; i = i+1) {
+        insertion_sort(&particle_nearest_ids_init, &particle_nearest_dists_init, particle_nearest_ids[i], particle_nearest_dists[i]);
+    }
+    // insert the new particle
+    insertion_sort(&particle_nearest_ids_init, &particle_nearest_dists_init, particle_global_id, particle_dist);
+
+    // set result
+    set_uint4_atomic(particle_local_id, particle_nearest_ids_init);
 
     //populate_nearest(particle_pos_here);
 //
@@ -292,8 +306,8 @@ fn main_image([[builtin(global_invocation_id)]] global_id: uint3) {
     let id = global_id.x + global_id.y * params.width;
     let ids = get_uint4_atomic(id);
     let dists = get_distance_vec(uint2(global_id.xy), ids);
-    //let r = 1.0 / (0.1 + 5.*dists*dists);
-    let r = 1.0 / (1.0 + 0.5*dists);
+    let r = 1.0 / (0.1 + 5.*dists*dists);
+    //let r = 1.0 / (1.0 + 0.5*dists);
     let c = dot(r, float4(1.));
     //let c = r.xxxx;
     //let resolution = float2(float(params.width), float(params.height));
