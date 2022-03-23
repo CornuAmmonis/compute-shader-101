@@ -104,6 +104,18 @@ fn eucMod_f(a: float, b: float) -> float {
     return a - abs(b) * floor(a / abs(b));
 }
 
+fn eucMod_f2(a: float2, b: float) -> float2 {
+    return a - abs(b) * floor(a / abs(b));
+}
+
+fn eucMod_f3(a: float3, b: float) -> float3 {
+    return a - abs(b) * floor(a / abs(b));
+}
+
+fn eucMod_f4(a: float4, b: float) -> float4 {
+    return a - abs(b) * floor(a / abs(b));
+}
+
 fn eucMod_i2(a: int2, b: int2) -> int2 {
     return int2(eucMod_i(a.x,b.x), eucMod_i(a.y,b.y));
 }
@@ -215,6 +227,15 @@ fn get_pressure_diff(pos: uint2) -> float2 {
     return float2(B_e - B_w, B_n - B_s);
 }
 
+fn get_pressure_lapl(pos: uint2) -> float {
+    let B_w = B_u2(add_offset(pos.xy,int2(-1, 0))).x;
+    let B_e = B_u2(add_offset(pos.xy,int2( 1, 0))).x;
+    let B_s = B_u2(add_offset(pos.xy,int2( 0,-1))).x;
+    let B_n = B_u2(add_offset(pos.xy,int2( 0, 1))).x;
+    let B_c = B_u2(pos.xy).x;
+    return 0.25 * (B_w + B_e + B_s + B_n) - B_c;
+}
+
 fn distance_kernel(distance: float) -> float {
     return exp(-0.3*distance);
 }
@@ -259,7 +280,7 @@ fn get_separation_velocity(particle_data: float4) -> float2 {
     return select(float2(0.), velocity_sum / weight_sum, weight_sum > 0.);
 }
 
-let velocity_dt = 0.05;
+let velocity_dt = 0.3;
 
 [[stage(compute), workgroup_size(16, 16)]]
 fn main_velocity([[builtin(global_invocation_id)]] global_id: uint3) {
@@ -269,11 +290,13 @@ fn main_velocity([[builtin(global_invocation_id)]] global_id: uint3) {
     let velocity_avg = get_weighted_velocity_avg(state);
     let separation_velocity = get_separation_velocity(state);
     let pressure_diff = get_pressure_diff(global_id.xy);
-    let new_velocity = mix(state.zw, velocity_avg - pressure_diff + separation_velocity, velocity_dt);
+    //let new_velocity = mix(state.zw, velocity_avg - pressure_diff + separation_velocity, velocity_dt);
+    let prev_velocity = state.zw;
+    let new_velocity = prev_velocity + velocity_dt * ((velocity_avg - prev_velocity) - pressure_diff - separation_velocity);
     var new_state = float4(state.xy + velocity_dt * new_velocity, new_velocity);
 
-    new_state.z = select(new_state.z, -new_state.z, (state.x < 0. && state.z < 0.) || (state.x > float(params.width) && state.z > 0.));
-    new_state.w = select(new_state.w, -new_state.w, (state.y < 0. && state.w < 0.) || (state.y > float(params.height) && state.w > 0.));
+    new_state.z = select(new_state.z, -new_state.z, (new_state.x < 0. && new_state.z < 0.) || (new_state.x > float(params.width) &&  new_state.z > 0.));
+    new_state.w = select(new_state.w, -new_state.w, (new_state.y < 0. && new_state.w < 0.) || (new_state.y > float(params.height) && new_state.w > 0.));
     new_state.x = clamp(new_state.x, -1., float(params.width));
     new_state.y = clamp(new_state.y, -1., float(params.height));
 
@@ -285,27 +308,35 @@ fn main_velocity([[builtin(global_invocation_id)]] global_id: uint3) {
     textureStore(texs, int2(global_id.xy), 0, new_state);
 }
 
-let pressure_dt = 0.5;
-let pressure_decay = 0.95;
+let pressure_dt = 0.05;
+let pressure_decay = 0.99;
 [[stage(compute), workgroup_size(16, 16)]]
 fn main_pressure([[builtin(global_invocation_id)]] global_id:  uint3) {
     set_seed(global_id);
-    let particle_data = A_u2(global_id.xy);
-    let particle_pos = particle_to_pos_u2(particle_data);
-    let particle_local_id = pos_to_id_u2(particle_pos);
-    let particle_nearest_ids = get_uint4_atomic(particle_local_id);
-    let particle_nearest_dists = get_distance_vec(particle_pos, particle_nearest_ids);
+
+    let global_id_unrolled = pos_to_id_u2(global_id.xy);
+
+    let particle_nearest_ids = get_uint4_atomic(global_id_unrolled);
+
+    // use the nearest particle as our basis
+    let particle_data = A_u2(id_to_pos(particle_nearest_ids[0]));
+    let distance_to_here = distance(float2(global_id.xy), particle_data.xy); // possible off-by-0.5 issue
+    let distance_weight = distance_kernel(distance_to_here);
 
     let pressure_prev = B_u2(global_id.xy);
     var pressure_delta = 0.0;
-    for (var i = 0; i < 4; i = i + 1) {
+    // iterate over remaining closest neighbors
+    for (var i = 1; i < 4; i = i + 1) {
         let neighbor_particle_data = A_u2(id_to_pos(particle_nearest_ids[i]));
         let neighbor_particle_vec = neighbor_particle_data.xy - particle_data.xy;
         let neighbor_particle_dist = length(neighbor_particle_vec);
         let partial_pressure = distance_kernel(neighbor_particle_dist) * dot(-neighbor_particle_vec, neighbor_particle_data.zw);
         pressure_delta = pressure_delta + partial_pressure;
     }
-    let new_pressure = pressure_prev * pressure_decay + pressure_dt * pressure_delta;
+
+    let pressure_laplacian = get_pressure_lapl(global_id.xy);
+    // weight pressure update by distance to global pos
+    let new_pressure = pressure_prev * pressure_decay + pressure_dt * (distance_weight * pressure_delta + 2.0*pressure_laplacian);
     textureStore(texs, int2(global_id.xy), 1, new_pressure);
 }
 
@@ -366,16 +397,34 @@ fn main_particle_spray([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
 
 }
 
+// MIT License, Inigo Quilez
+// https://www.shadertoy.com/view/lsS3Wc
+fn hsv2rgb(c: float3) -> float3 {
+    // unfortunately this isn't rewritten for clarity,
+    // the wgsl compiler is just that fiddly
+    let modt = eucMod_f3(c.x*6.0+float3(0.0,4.0,2.0),6.0) - 3.0;
+    let abst = abs(modt) - 1.0;
+    let rgb = clamp( abst, float3(0.0), float3(1.0) );
+    return c.z * mix( float3(1.0), rgb, c.y);
+}
+
 [[stage(compute), workgroup_size(16, 16)]]
 fn main_image([[builtin(global_invocation_id)]] global_id: uint3) {
     set_seed(global_id);
     let id = global_id.x + global_id.y * params.width;
     let ids = get_uint4_atomic(id);
     let dists = get_distance_vec(uint2(global_id.xy), ids);
-    let r = 1.0 / (4.0 + 20.*dists*dists);
+    //let r = 1.0 / (4.0 + 1.*dists*dists);
+    let r = 0.2 * exp(-0.3*dists*dists);
     //let r = 1.0 / (1.0 + 0.5*dists);
-    let c = dot(r, float4(1.));
-    //let c = r.xxxx;
+    var rgb = float4(0.);
+    for (var i = 0; i < 4; i = i + 1) {
+        let particle_data = A_u2(id_to_pos(ids[i]));
+        rgb = rgb + r[i] * float4(hsv2rgb(float3(atan2(particle_data.z, particle_data.w),1.,0.2*length(particle_data.zw))),1.);
+    }
+    let c = rgb;
+    //let c = rgb*float4(dot(r, float4(1.)));
+    //let c = 0.5 + 0.05*float4(B_u2(global_id.xy).x);
     //let resolution = float2(float(params.width), float(params.height));
     //let c = A_u2(global_id.xy) / float4(resolution, resolution);
 
