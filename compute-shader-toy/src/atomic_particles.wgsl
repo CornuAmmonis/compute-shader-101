@@ -248,6 +248,8 @@ fn populate_nearest(pos_here: uint2) {
     set_nearest_arr_at_offset(16u,n4);
 }
 
+let POPULATE_FROM_GLOBAL_NEIGHBORS = true;
+
 [[stage(compute), workgroup_size(16, 16)]]
 fn main_particle_spray([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     set_seed(global_id);
@@ -277,7 +279,7 @@ fn main_particle_spray([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     set_uint4_atomic(particle_local_id, particle_nearest_ids_init);
 
     //populate_nearest(particle_pos_here);
-//
+    //
     //for (var i = 0; i < 20; i = i+1) {
     //    let candidate_id = nearest_ids[i];
     //    let candidate_pos = A_u2(id_to_pos(candidate_id)).xy;
@@ -285,18 +287,21 @@ fn main_particle_spray([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     //    insertion_sort(&ids, &dists, candidate_id, candidate_dist);
     //}
     //set_uint4_atomic(particle_id_here, ids);
-//
-    //var global_ids = get_uint4_atomic(global_id_here);
-    //var global_dists = get_distance_vec(global_pos, global_ids);
-    //populate_nearest(global_pos);
-//
-    //for (var i = 0; i < 20; i = i+1) {
-    //    let candidate_id = nearest_ids[i];
-    //    let candidate_pos = A_u2(id_to_pos(candidate_id)).xy;
-    //    let candidate_dist = distance(float2(global_pos), candidate_pos);
-    //    insertion_sort(&global_ids, &global_dists, candidate_id, candidate_dist);
-    //}
-    //set_uint4_atomic(global_id_here, global_ids);
+    //
+
+    if (POPULATE_FROM_GLOBAL_NEIGHBORS) {
+        var global_ids = get_uint4_atomic(global_id_unrolled);
+        var global_dists = get_distance_vec(global_pos, global_ids);
+        populate_nearest(global_pos);
+
+        for (var i = 0; i < 20; i = i+1) {
+            let candidate_id = nearest_ids[i];
+            let candidate_pos = A_u2(id_to_pos(candidate_id)).xy;
+            let candidate_dist = distance(float2(global_pos), candidate_pos);
+            insertion_sort(&global_ids, &global_dists, candidate_id, candidate_dist);
+        }
+        set_uint4_atomic(global_id_unrolled, global_ids);
+    }
 
 }
 
@@ -306,7 +311,7 @@ fn main_image([[builtin(global_invocation_id)]] global_id: uint3) {
     let id = global_id.x + global_id.y * params.width;
     let ids = get_uint4_atomic(id);
     let dists = get_distance_vec(uint2(global_id.xy), ids);
-    let r = 1.0 / (0.1 + 5.*dists*dists);
+    let r = 1.0 / (4.0 + 5.*dists*dists);
     //let r = 1.0 / (1.0 + 0.5*dists);
     let c = dot(r, float4(1.));
     //let c = r.xxxx;
