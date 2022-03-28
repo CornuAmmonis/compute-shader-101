@@ -87,9 +87,9 @@ fn A_u2(fragCoord: uint2) -> float4 {
     return textureLoad(tex, int2(fragCoord), 0, 0);
 }
 
-fn B(fragCoord: float2) -> float4 {
+fn B_f2(fragCoord: float2) -> float4 {
     let resolution = float2(float(params.width), float(params.height));
-    return textureSampleLevel(tex, bilinear, fract(fragCoord / resolution), 1, 0.);
+    return textureSampleLevel(tex, bilinear, fract((fragCoord) / resolution), 1, 0.);
 }
 
 fn B_u2(fragCoord: uint2) -> float4 {
@@ -108,6 +108,10 @@ fn eucMod_f2(a: float2, b: float) -> float2 {
     return a - abs(b) * floor(a / abs(b));
 }
 
+fn eucMod_f2_f2(a: float2, b: float2) -> float2 {
+    return a - abs(b) * floor(a / abs(b));
+}
+
 fn eucMod_f3(a: float3, b: float) -> float3 {
     return a - abs(b) * floor(a / abs(b));
 }
@@ -123,6 +127,11 @@ fn eucMod_i2(a: int2, b: int2) -> int2 {
 fn wrap_to_bounds(pos: int2) -> uint2 {
     let bounds = int2(int(params.width), int(params.height));
     return uint2(eucMod_i2(pos, bounds));
+}
+
+fn wrap_to_bounds_f2(pos: float2) -> float2 {
+    let bounds = float2(float(params.width), float(params.height));
+    return eucMod_f2_f2(pos, bounds);
 }
 
 fn id_to_pos(id: uint) -> uint2 {
@@ -193,7 +202,7 @@ fn set_uint4_atomic(id: uint, val: uint4) {
     atomicStore(&buf.data[id*4u+3u], val.w);
 }
 
-var<private> nearest_ids: array<uint,20>;
+var<private> nearest_ids: array<uint,16>;
 
 fn set_nearest_arr_at_offset(offset: uint, vals: uint4) {
     nearest_ids[offset + 0u] = vals.x;
@@ -204,6 +213,10 @@ fn set_nearest_arr_at_offset(offset: uint, vals: uint4) {
 
 fn add_offset(pos: uint2, offset: int2) -> uint2 {
     return wrap_to_bounds(int2(pos) + offset);
+}
+
+fn add_offset_f2(pos: float2, offset: float2) -> float2 {
+    return wrap_to_bounds_f2(pos + offset);
 }
 
 fn populate_nearest(pos_here: uint2) {
@@ -219,6 +232,17 @@ fn populate_nearest(pos_here: uint2) {
     set_nearest_arr_at_offset(16u,n4);
 }
 
+fn populate_nearest_stride(pos_here: uint2, stride: int) {
+    let n0 = get_uint4_atomic(pos_to_id_u2(add_offset(pos_here,int2(-stride, 0))));
+    let n1 = get_uint4_atomic(pos_to_id_u2(add_offset(pos_here,int2( stride, 0))));
+    let n2 = get_uint4_atomic(pos_to_id_u2(add_offset(pos_here,int2( 0,-stride))));
+    let n3 = get_uint4_atomic(pos_to_id_u2(add_offset(pos_here,int2( 0, stride))));
+    set_nearest_arr_at_offset(0u,n0);
+    set_nearest_arr_at_offset(4u,n1);
+    set_nearest_arr_at_offset(8u,n2);
+    set_nearest_arr_at_offset(12u,n3);
+}
+
 fn get_pressure_diff(pos: uint2) -> float2 {
     let B_w = B_u2(add_offset(pos.xy,int2(-1, 0))).x;
     let B_e = B_u2(add_offset(pos.xy,int2( 1, 0))).x;
@@ -227,17 +251,44 @@ fn get_pressure_diff(pos: uint2) -> float2 {
     return float2(B_e - B_w, B_n - B_s);
 }
 
-fn get_pressure_lapl(pos: uint2) -> float {
-    let B_w = B_u2(add_offset(pos.xy,int2(-1, 0))).x;
-    let B_e = B_u2(add_offset(pos.xy,int2( 1, 0))).x;
-    let B_s = B_u2(add_offset(pos.xy,int2( 0,-1))).x;
-    let B_n = B_u2(add_offset(pos.xy,int2( 0, 1))).x;
-    let B_c = B_u2(pos.xy).x;
+fn get_pressure_diff_f2(pos: float2) -> float2 {
+    let B_w = B_f2(add_offset_f2(pos.xy,float2(-1., 0.))).x;
+    let B_e = B_f2(add_offset_f2(pos.xy,float2( 1., 0.))).x;
+    let B_s = B_f2(add_offset_f2(pos.xy,float2( 0.,-1.))).x;
+    let B_n = B_f2(add_offset_f2(pos.xy,float2( 0., 1.))).x;
+    return float2(B_e - B_w, B_n - B_s);
+}
+
+
+fn get_divergence(pos: uint2) -> float {
+    let B_w = B_u2(add_offset(pos.xy,int2(-1, 0))).zw;
+    let B_e = B_u2(add_offset(pos.xy,int2( 1, 0))).zw;
+    let B_s = B_u2(add_offset(pos.xy,int2( 0,-1))).zw;
+    let B_n = B_u2(add_offset(pos.xy,int2( 0, 1))).zw;
+    return -B_e.x + B_w.x - B_n.y + B_s.y;
+}
+
+fn get_pressure_lapl(pos: uint2) -> float4 {
+    let B_w = B_u2(add_offset(pos.xy,int2(-1, 0)));
+    let B_e = B_u2(add_offset(pos.xy,int2( 1, 0)));
+    let B_s = B_u2(add_offset(pos.xy,int2( 0,-1)));
+    let B_n = B_u2(add_offset(pos.xy,int2( 0, 1)));
+    let B_c = B_u2(pos.xy);
     return 0.25 * (B_w + B_e + B_s + B_n) - B_c;
 }
 
 fn distance_kernel(distance: float) -> float {
-    return exp(-0.3*distance);
+    //return exp(-0.1*distance);
+    return exp(-0.1*distance);
+}
+
+fn distance_kernel_f4(distance: float4) -> float4 {
+    //return exp(-0.1*distance);
+    return exp(-0.1*distance);
+}
+
+fn gauss_distance_kernel(distance: float) -> float {
+    return exp(-0.1*distance*distance);
 }
 
 fn get_weighted_velocity_avg(particle_data: float4) -> float2 {
@@ -277,7 +328,7 @@ fn get_separation_velocity(particle_data: float4) -> float2 {
         weight_sum = weight_sum + kernel_weight;
     }
 
-    return select(float2(0.), velocity_sum / weight_sum, weight_sum > 0.);
+    return select(float2(0.), velocity_sum / 4.0, weight_sum > 0.);
 }
 
 let velocity_dt = 0.3;
@@ -289,16 +340,19 @@ fn main_velocity([[builtin(global_invocation_id)]] global_id: uint3) {
     let state = A_u2(global_id.xy);
     let velocity_avg = get_weighted_velocity_avg(state);
     let separation_velocity = get_separation_velocity(state);
-    let pressure_diff = get_pressure_diff(global_id.xy);
+    //let pressure_diff = get_pressure_diff(global_id.xy);
+    let pressure_diff = get_pressure_diff_f2(state.xy);
     //let new_velocity = mix(state.zw, velocity_avg - pressure_diff + separation_velocity, velocity_dt);
+    //let prev_velocity = state.zw;
+    let p2g_velocity = B_f2(state.xy).zw;
     let prev_velocity = state.zw;
-    let new_velocity = prev_velocity + velocity_dt * ((velocity_avg - prev_velocity) - pressure_diff - separation_velocity);
+    let new_velocity = prev_velocity + velocity_dt * (0.125 * (velocity_avg - prev_velocity) + 0.125 * (p2g_velocity - prev_velocity) - 0.3*pressure_diff + 0.1*separation_velocity + float2(0.0,0.2));
     var new_state = float4(state.xy + velocity_dt * new_velocity, new_velocity);
 
-    new_state.z = select(new_state.z, -new_state.z, (new_state.x < 0. && new_state.z < 0.) || (new_state.x > float(params.width) &&  new_state.z > 0.));
-    new_state.w = select(new_state.w, -new_state.w, (new_state.y < 0. && new_state.w < 0.) || (new_state.y > float(params.height) && new_state.w > 0.));
-    new_state.x = clamp(new_state.x, -1., float(params.width));
-    new_state.y = clamp(new_state.y, -1., float(params.height));
+    new_state.z = select(new_state.z, -new_state.z, (new_state.x < 0. && new_state.z < 0.) || (new_state.x > float(params.width - 1u)  && new_state.z > 0.));
+    new_state.w = select(new_state.w, -new_state.w, (new_state.y < 0. && new_state.w < 0.) || (new_state.y > float(params.height - 1u) && new_state.w > 0.));
+    new_state.x = clamp(new_state.x, 0., float(params.width - 1u));
+    new_state.y = clamp(new_state.y, 0., float(params.height - 1u));
 
     if (params.frame < 3u) {
         let f_size = float2(float(params.width), float(params.height));
@@ -308,7 +362,7 @@ fn main_velocity([[builtin(global_invocation_id)]] global_id: uint3) {
     textureStore(texs, int2(global_id.xy), 0, new_state);
 }
 
-let pressure_dt = 0.05;
+let pressure_dt = 0.01;
 let pressure_decay = 0.99;
 [[stage(compute), workgroup_size(16, 16)]]
 fn main_pressure([[builtin(global_invocation_id)]] global_id:  uint3) {
@@ -322,22 +376,83 @@ fn main_pressure([[builtin(global_invocation_id)]] global_id:  uint3) {
     let particle_data = A_u2(id_to_pos(particle_nearest_ids[0]));
     let distance_to_here = distance(float2(global_id.xy), particle_data.xy); // possible off-by-0.5 issue
     let distance_weight = distance_kernel(distance_to_here);
+    let pos_forward = particle_data.xy + velocity_dt * particle_data.zw;
 
-    let pressure_prev = B_u2(global_id.xy);
+    let state_prev = B_u2(global_id.xy);
+    let pressure_prev = state_prev.x;
+    let velocity_prev = state_prev.zw;
     var pressure_delta = 0.0;
+
+    var velocity_sum = distance_weight * particle_data.zw;
+    var weight_sum = distance_weight;
+
     // iterate over remaining closest neighbors
     for (var i = 1; i < 4; i = i + 1) {
         let neighbor_particle_data = A_u2(id_to_pos(particle_nearest_ids[i]));
         let neighbor_particle_vec = neighbor_particle_data.xy - particle_data.xy;
         let neighbor_particle_dist = length(neighbor_particle_vec);
-        let partial_pressure = distance_kernel(neighbor_particle_dist) * dot(-neighbor_particle_vec, neighbor_particle_data.zw);
-        pressure_delta = pressure_delta + partial_pressure;
-    }
+        let neighbor_pos_forward = neighbor_particle_data.xy + velocity_dt * neighbor_particle_data.zw;
+        let partial_pressure0 = distance_kernel(neighbor_particle_dist) * (distance(particle_data.xy, neighbor_particle_data.xy) - distance(neighbor_pos_forward, pos_forward));
+        let partial_pressure1 = distance_kernel(neighbor_particle_dist) * dot(-neighbor_particle_vec, neighbor_particle_data.zw);
+        pressure_delta = pressure_delta + partial_pressure0 + partial_pressure1;
 
+        let neighbor_distance_weight = distance_kernel(neighbor_particle_dist);
+        let weighted_velocity = distance_weight * neighbor_particle_data.zw;
+        velocity_sum = velocity_sum + weighted_velocity;
+        weight_sum = weight_sum + neighbor_distance_weight;
+    }
+    let new_velocity = mix(velocity_prev, select(float2(0.), velocity_sum / 4.0, weight_sum > 0.), 0.125);
     let pressure_laplacian = get_pressure_lapl(global_id.xy);
     // weight pressure update by distance to global pos
-    let new_pressure = pressure_prev * pressure_decay + pressure_dt * (distance_weight * pressure_delta + 2.0*pressure_laplacian);
-    textureStore(texs, int2(global_id.xy), 1, new_pressure);
+    let new_pressure = pressure_prev * pressure_decay + pressure_dt * (distance_weight * pressure_delta + pressure_laplacian.x);
+    textureStore(texs, int2(global_id.xy), 1, float4(new_pressure, 0., new_velocity));
+}
+
+
+[[stage(compute), workgroup_size(16, 16)]]
+fn main_pressure_b([[builtin(global_invocation_id)]] global_id:  uint3) {
+    set_seed(global_id);
+
+    let global_id_unrolled = pos_to_id_u2(global_id.xy);
+
+    let particle_nearest_ids = get_uint4_atomic(global_id_unrolled);
+
+    //let distance_to_here = distance(float2(global_id.xy), particle_data.xy);
+    //let distance_weight = distance_kernel(distance_to_here);
+    let state_prev = B_u2(global_id.xy);
+    let velocity_prev = state_prev.zw;
+    let pressure_prev = state_prev.x;
+    var pressure_delta = 0.0;
+    var velocity_sum = float2(0.);
+    var weight_sum = 0.;
+    var max_distance_weight = 0.;
+    // Particle to Grid step
+    for (var i = 0; i < 4; i = i + 1) {
+        let neighbor_particle_data = A_u2(id_to_pos(particle_nearest_ids[i]));
+        let neighbor_particle_vec = neighbor_particle_data.xy - float2(global_id.xy); // possible off-by-0.5 issue
+        let neighbor_particle_dist = length(neighbor_particle_vec);
+        let distance_weight = gauss_distance_kernel(neighbor_particle_dist);
+        max_distance_weight = select(max_distance_weight, distance_weight, distance_weight > max_distance_weight);
+        let weighted_velocity = distance_weight * neighbor_particle_data.zw;
+        velocity_sum = velocity_sum + weighted_velocity;
+        weight_sum = weight_sum + distance_weight;
+    }
+
+    //let new_velocity = select(float2(0.), velocity_sum / weight_sum, weight_sum > 0.);
+    //let new_velocity = mix(velocity_prev, velocity_sum / 4., 0.5);
+    //let new_velocity = mix(velocity_prev, velocity_sum, 0.5);
+    var new_velocity = select(float2(0.), velocity_sum / weight_sum, weight_sum > 0.);
+    let pressure_laplacian = get_pressure_lapl(global_id.xy);
+
+    //new_velocity = velocity_prev + 0.4 * (new_velocity - velocity_prev + pressure_laplacian.zw);
+    new_velocity = 0.5*velocity_prev + 0.5 * (new_velocity + pressure_laplacian.zw);
+
+    let divergence = get_divergence(global_id.xy);
+
+    // weight pressure update by distance to global pos
+    let new_pressure = pressure_prev * pressure_decay + pressure_dt * (divergence + pressure_laplacian.x);
+
+    textureStore(texs, int2(global_id.xy), 1, float4(new_pressure, 0., new_velocity));
 }
 
 let POPULATE_FROM_GLOBAL_NEIGHBORS = true;
@@ -357,7 +472,6 @@ fn main_particle_spray([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     var particle_nearest_dists = get_distance_vec(particle_pos, particle_nearest_ids);
     let particle_dist = distance(float2(particle_pos), particle_data.xy); //won't work for wrapped bounds
 
-
     var particle_nearest_ids_init = uint4(INVALID_ID);
     var particle_nearest_dists_init = float4(ARBITRARILY_LARGE_DISTANCE);
     // resort the existing index
@@ -370,28 +484,37 @@ fn main_particle_spray([[builtin(global_invocation_id)]] global_id: vec3<u32>) {
     // set result
     set_uint4_atomic(particle_local_id, particle_nearest_ids_init);
 
-    //populate_nearest(particle_pos_here);
-    //
-    //for (var i = 0; i < 20; i = i+1) {
-    //    let candidate_id = nearest_ids[i];
-    //    let candidate_pos = A_u2(id_to_pos(candidate_id)).xy;
-    //    let candidate_dist = distance(float2(particle_pos_here), candidate_pos);
-    //    insertion_sort(&ids, &dists, candidate_id, candidate_dist);
-    //}
-    //set_uint4_atomic(particle_id_here, ids);
-    //
-
     if (POPULATE_FROM_GLOBAL_NEIGHBORS) {
         var global_ids = get_uint4_atomic(global_id_unrolled);
         var global_dists = get_distance_vec(global_pos, global_ids);
-        populate_nearest(global_pos);
 
-        for (var i = 0; i < 20; i = i+1) {
+        populate_nearest_stride(global_pos, 1);
+
+        for (var i = 0; i < 16; i = i+1) {
             let candidate_id = nearest_ids[i];
             let candidate_pos = A_u2(id_to_pos(candidate_id)).xy;
             let candidate_dist = distance(float2(global_pos), candidate_pos);
             insertion_sort(&global_ids, &global_dists, candidate_id, candidate_dist);
         }
+
+        populate_nearest_stride(global_pos, 2);
+
+        for (var i = 0; i < 16; i = i+1) {
+            let candidate_id = nearest_ids[i];
+            let candidate_pos = A_u2(id_to_pos(candidate_id)).xy;
+            let candidate_dist = distance(float2(global_pos), candidate_pos);
+            insertion_sort(&global_ids, &global_dists, candidate_id, candidate_dist);
+        }
+
+        populate_nearest_stride(global_pos, 4);
+
+        for (var i = 0; i < 16; i = i+1) {
+            let candidate_id = nearest_ids[i];
+            let candidate_pos = A_u2(id_to_pos(candidate_id)).xy;
+            let candidate_dist = distance(float2(global_pos), candidate_pos);
+            insertion_sort(&global_ids, &global_dists, candidate_id, candidate_dist);
+        }
+
         set_uint4_atomic(global_id_unrolled, global_ids);
     }
 
@@ -405,7 +528,7 @@ fn hsv2rgb(c: float3) -> float3 {
     let modt = eucMod_f3(c.x*6.0+float3(0.0,4.0,2.0),6.0) - 3.0;
     let abst = abs(modt) - 1.0;
     let rgb = clamp( abst, float3(0.0), float3(1.0) );
-    return c.z * mix( float3(1.0), rgb, c.y);
+    return clamp(c.z, 0., 1.) * mix( float3(1.0), rgb, c.y);
 }
 
 [[stage(compute), workgroup_size(16, 16)]]
@@ -415,18 +538,20 @@ fn main_image([[builtin(global_invocation_id)]] global_id: uint3) {
     let ids = get_uint4_atomic(id);
     let dists = get_distance_vec(uint2(global_id.xy), ids);
     //let r = 1.0 / (4.0 + 1.*dists*dists);
-    let r = 0.2 * exp(-0.3*dists*dists);
+    let r = 0.25 * distance_kernel_f4(dists);
     //let r = 1.0 / (1.0 + 0.5*dists);
     var rgb = float4(0.);
     for (var i = 0; i < 4; i = i + 1) {
         let particle_data = A_u2(id_to_pos(ids[i]));
-        rgb = rgb + r[i] * float4(hsv2rgb(float3(atan2(particle_data.z, particle_data.w),1.,0.2*length(particle_data.zw))),1.);
+        rgb = rgb + r[i] * float4(hsv2rgb(float3(atan2(particle_data.z, particle_data.w)/6.28,1.,1.0*length(particle_data.zw))),1.);
     }
-    let c = rgb;
+    let p = rgb;
+
+    let c = float4(.0,0.,0.,0.) + B_u2(global_id.xy).zwxx;
     //let c = rgb*float4(dot(r, float4(1.)));
     //let c = 0.5 + 0.05*float4(B_u2(global_id.xy).x);
     //let resolution = float2(float(params.width), float(params.height));
     //let c = A_u2(global_id.xy) / float4(resolution, resolution);
 
-    textureStore(col, int2(global_id.xy), float4(c));
+    textureStore(col, int2(global_id.xy), float4(p));
 }
